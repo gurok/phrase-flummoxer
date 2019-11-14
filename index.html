@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+	<!--
+	 This page and code within is made available under the Creative Commons CC0 1.0 Public Domain dedication
+	 https://creativecommons.org/publicdomain/zero/1.0/
+
+	 Feel free to report bugs and contribute upstream via the following repository
+	 https://gitlab.com/Cheeseness/phrase-flummoxer
+	  -->
+	<title>Phrase Flummoxer</title>
+	<style>
+		html, body
+		{
+			height: 100%;
+		}
+		
+		body
+		{
+			background: #606060;
+			color: #e0e0e0;
+			font-family: sans;
+		}
+
+		#phraseContainer
+		{
+			font-size: 3em;
+		}
+
+		.freeCharacter
+		{
+			display:inline-block;
+			line-height: 2em;
+		}
+		
+		.phraseCharacter
+		{
+			display:inline-block;
+			min-width: 2em;
+			min-height: 2em;
+			line-height: 2em;
+			border: 1px solid black;
+			background-color: white;
+			text-align: center;
+			text-transform: uppercase;
+			margin: 0 0.125em;
+			color: #303030;
+			user-select: none;
+		}
+
+		.hiddenCharacter
+		{
+			color: transparent;
+		}
+
+		.word
+		{
+			white-space: nowrap;
+			line-height: 3em;
+		}
+
+		.extraStuff
+		{
+			font-size: 2em;
+		}
+		.extraStuff Button
+		{
+			font-size: 2em;
+			float: right;
+			margin-right: 0.5em;
+			border-radius: 0.25em;
+			padding: 0 0.25em;
+		}
+		.overlay
+		{
+			position: fixed;
+			top: 0;
+			left: 0;
+			width: 100%;
+			height: 100%;
+			background: #606060;
+			z-index: 999;
+		}
+		.hidden
+		{
+			display: none;
+			height: 0;
+		}
+
+		.buttonList
+		{
+			width: 25%;
+			margin-left: auto;
+			margin-right: auto;
+			margin-top: 12%;
+		}
+
+		.buttonList button, .buttonList textarea
+		{
+			width: 100%;
+			display: block;
+			font-size: 2em;
+			border-radius: 0.25em;
+			padding: 0 0.25em;
+			margin: 0.25em 0;
+		}
+		#finalPhrase
+		{
+			font-style: italic;
+			text-align: center;
+			font-size: 3em;
+		}
+
+		#finalPhrase::before, #finalPhrase::after
+		{
+			content: '\"';
+		}
+
+	</style>
+	<script type = 'text/javascript'>
+	/*
+	TODO: Add support for some phrase metadata (most of them tend to be quotes and it'd be nice to display something relevant on the "win" overlay)
+	TODO: Add an instructions overlay
+	TODO: Disable start game button when phraseList is empty
+	TODO: Fireworks on reveal/win
+	TODO: Screenshake/flash on bad/no
+	TODO: Use a font dropped into the font folder?
+	*/
+
+	var defaultConfig = {greedyLetters: false}; //Initial values for stored configuraton variables that settings buttons will be generated for
+	var freeCharacters = [' ', '.', ',', ':', '\'', '\"', ';', '!', '?', '&', '\n', '-', '_']; //A list of characters that are not guessable and will be revealed
+
+	var currentOverlayID = ""; //DOM ID of the most recent currently active overlay
+	var phraseContainer = null; //DOM Element that phrase letter elements will get stuffed into
+	var letterList = null; //Convenience list for accessing DOM elements for each letter
+
+	var phraseList = null; //Array storing the runtime phrase list used throughout the game
+	var currentPhraseIndex = -1; //Index into phraseList for the currently used phrase
+
+	var guessCount = 0; //Counter for letter guesses
+	var totalLetters = 0;  //The number of hidden letters in the current phrase
+
+
+	/**
+	 * Converts a camel case string into a natural language string
+	 */
+	function init()
+	{
+		console.log("Setting up");
+
+		/*Set initial config and populate settings buttons*/
+		var settingsContainer = document.getElementById("settingsContainer")
+		for (var configItem in defaultConfig)
+		{
+			var configValue = getConfigValue(configItem);
+			if (configValue == undefined)
+			{
+				configValue = defaultConfig[configItem];
+				setConfigValue(configItem, configValue);
+			}
+
+			if (typeof(configValue) == 'boolean')
+			{
+				console.log(typeof(configValue));
+				var configButton = document.createElement("button");
+				configButton.innerHTML = uncamel(configItem) + " (" + configValue + ")";
+				configButton.onclick = function() { toggleConfigBool(configItem); };
+				configButton.id = configItem + "Button";
+				settingsContainer.appendChild(configButton);
+			}
+		}
+
+
+		loadPhrases();
+		phraseContainer = document.getElementById("phraseContainer");
+		showOverlay("menuOverlay");
+	}
+
+
+	/**
+	 * Converts a camel case string into a natural language string
+	 */
+	function uncamel(value)
+	{
+		return value.replace(/([A-Z])/g, ' $1').replace(/^./, function(str){ return str.toUpperCase(); })
+	}
+
+
+	/**
+	 * Retrieves and parses stored JSON values for the specified key
+	 */
+	function getConfigValue(key, defaultValue = null)
+	{
+		return JSON.parse(window.localStorage.getItem(key))
+	}
+
+
+	/**
+	 * Stores specified value as a JSON string for the specified key
+	 */
+	function setConfigValue(key, value)
+	{
+		window.localStorage.setItem(key, JSON.stringify(value));
+	}
+
+
+	/**
+	 * Toggles the stored value for the specified config file and updates the relevant settings button
+	 */
+	function toggleConfigBool(key)
+	{
+		var value = !getConfigValue(key);
+		setConfigValue(key, value);
+		document.getElementById(key + "Button").innerHTML = uncamel(key) + " (" + value + ")";
+	}
+
+
+	/**
+	 * Retrieves the stored phrase list
+	 */
+	function loadPhrases()
+	{
+		phraseList = getConfigValue("phraseList");
+
+		console.log("Loading phrase list: ", phraseList);
+
+		var phraseInput = document.getElementById("phraseInput");
+		phraseInput.value = "";
+		if (phraseList == undefined)
+		{
+			phraseList = [];
+			return
+		}
+
+		for (var i = 0; i < phraseList.length; i++)
+		{
+			phraseInput.value += phraseList[i] + '\n';
+		}
+	}
+
+
+	/**
+	 * Updates the stored phrase list with an array generated from textarea input split on newlines
+	 */
+	function updatePhrases()
+	{
+		var phraseInput = document.getElementById("phraseInput").value.trim();
+		phraseList = phraseInput.split('\n');
+		setConfigValue("phraseList", phraseList);
+	}
+
+
+	/**
+	 * Hides the specified overlay
+	 */
+	function closeOverlay(overlayID)
+	{
+		if (overlayID == "")
+		{
+			return
+		}
+
+		var currentOverlay = document.getElementById(overlayID);
+		if (currentOverlay != null)
+		{
+			currentOverlay.classList.remove("overlay");
+			currentOverlay.classList.add("hidden");
+		}
+		currentOverlayID = "";
+	}
+
+
+	/**
+	 * Shows the specified overlay after hiding the last active one
+	 */
+	function showOverlay(overlayID)
+	{
+		closeOverlay(currentOverlayID);
+		var currentOverlay = document.getElementById(overlayID);
+		if (currentOverlay != null)
+		{
+			currentOverlay.classList.remove("hidden");
+			currentOverlay.classList.add("overlay");
+			currentOverlayID = overlayID;
+		}
+		else
+		{
+			console.log("Can't show overlay " + overlayID);
+		}
+	}
+
+
+	/**
+	 * Begins the game at the first phrase
+	 */
+	function startGame()
+	{
+		if (phraseList.length < 1)
+		{
+			alert("No phrases have been configured. Returning to menu.");
+			showOverlay("menuOverlay");
+			return
+		}
+		currentPhraseIndex = 0;
+		setupPhrase(phraseList[currentPhraseIndex]);
+	}
+
+
+	/**
+	 * Moves onto the next phrase, or returns to the menu if there are no phrases left
+	 */
+	function showNextPhrase()
+	{
+		currentPhraseIndex++;
+		if (currentPhraseIndex < phraseList.length)
+		{
+			setupPhrase(phraseList[currentPhraseIndex]);
+		}
+		else
+		{
+			showOverlay("menuOverlay");
+			teardownPhrase();
+		}
+	}
+
+
+	/**
+	 * Sets up letter press event handler and generates letter elements for the speicified phrase
+	 */
+	function setupPhrase(newPhrase = "testing the testing tester, test!")
+	{
+		document.addEventListener('keypress', shortcutHandler);
+
+		currentPhrase = newPhrase;
+		guessCount = 0;
+		totalLetters = 0;
+
+		while (phraseContainer.firstChild)
+		{
+			phraseContainer.removeChild(phraseContainer.firstChild);
+		}
+
+		letterList = []
+		var wordElement = document.createElement("span");
+		wordElement.classList.add("word");
+		phraseContainer.appendChild(wordElement);
+		for (var i = 0; i < currentPhrase.length; i++)
+		{
+			var currentLetter = currentPhrase.charAt(i);
+			var letterElement = document.createElement("span");
+			letterElement.innerHTML = currentLetter;
+			letterList.push(letterElement);
+			wordElement.appendChild(letterElement);
+			var isFree = false
+			for (var j = 0; j < freeCharacters.length; j++)
+			{
+				if (currentLetter == freeCharacters[j])
+				{
+					if (j == 0)
+					{
+						letterElement.innerHTML = '&nbsp';
+					}
+					letterElement.classList.add("freeCharacter");
+					isFree = true
+					break;
+				}
+			}
+			if (!isFree)
+			{
+				letterElement.classList.add("phraseCharacter", "hiddenCharacter");
+				totalLetters += 1;
+			}
+			else
+			{
+				wordElement = document.createElement("span");
+				wordElement.classList.add("word");
+				var breakableWhitespace = document.createElement("span")
+				breakableWhitespace.innerHTML = ' ';
+				phraseContainer.appendChild(breakableWhitespace);
+				phraseContainer.appendChild(wordElement);
+			}
+		}
+
+		updateGuessCount();
+		updateRemainingLetterCount();
+	}
+
+
+	/**
+	 * Removes letter press event handler.
+	 * Called when returning to the menu
+	 */
+	function teardownPhrase()
+	{
+		document.removeEventListener('keypress', shortcutHandler);
+	}
+
+
+	/**
+	 * Handles letter presses during play
+	 */
+	function shortcutHandler(e)
+	{
+		var k = e.charCode || e.keyCode;
+		if (k >= 97)
+		{
+			k -= 32;
+		}
+		if (k >= 65 && k <= 90) //latin alphabet
+		{
+			guessCount += 1;
+			updateGuessCount();
+
+			for (var i = 0; i < currentPhrase.length; i++)
+			{
+				if (currentPhrase.charAt(i).toUpperCase() == String.fromCharCode(k))
+				{
+					if (letterList[i].classList.contains("hiddenCharacter"))
+					{
+						letterList[i].classList.remove("hiddenCharacter");
+						updateRemainingLetterCount();
+						if (!getConfigValue("greedyLetters"))
+						{
+							break;
+						}
+					}
+				}
+			}
+			e.preventDefault();
+		}
+		return false; //We do this because *some* browsers don't like event.preventDefault()
+	}
+
+
+	/**
+	 * Reveals all letters and calls updateRemainingLetterCount()
+	 * Function is probably redundant now that overlays are being used, and should probably handle some nice animation instead
+	 */
+	function revealPhrase()
+	{
+		for (var i = 0; i < letterList.length; i++)
+		{
+			if (letterList[i].classList.contains("hiddenCharacter"))
+			{
+				letterList[i].classList.remove("hiddenCharacter");
+			}
+		}
+
+		updateRemainingLetterCount()
+	}
+
+
+	/**
+	 * Updates guess count value
+	 */
+	function updateGuessCount()
+	{
+		document.getElementById("guessCount").innerHTML = guessCount;
+	}
+
+
+	/**
+	 * Updates remaining letter count value and triggers win overlay if no letters are left
+	 */
+	function updateRemainingLetterCount()
+	{
+		var remainingLetters = 0;
+		for (var i = 0; i < letterList.length; i++)
+		{
+			if (letterList[i].classList.contains("hiddenCharacter"))
+			{
+				remainingLetters += 1;
+			}
+		}
+		document.getElementById("remainingLetterCount").innerHTML = remainingLetters + " (of " + totalLetters + ")";
+
+		if (remainingLetters == 0)
+		{
+			document.getElementById("finalPhrase").innerHTML = phraseList[currentPhraseIndex];
+			showOverlay("winnerOverlay");
+
+			if (currentPhraseIndex < phraseList.length - 1)
+			{
+				document.getElementById("nextPhraseButton").innerHTML = "Next";
+			}
+			else
+			{
+				console.log("Last phrase?");
+				document.getElementById("nextPhraseButton").innerHTML = "Menu";
+			}
+		}
+	}
+
+	</script>
+</head>
+<body onload = 'javascript:init()'>
+	<div id = 'menuOverlay' class = 'hidden'>
+		<div class = 'buttonList'>
+			<h1>Menu</h1>
+			<button onclick = 'javascript:closeOverlay("menuOverlay"); startGame();'>Start Game</button>
+			<button onclick = 'javascript:showOverlay("phrasesOverlay");'>Set Up Phrases</button>
+			<button onclick = 'javascript:showOverlay("settingsOverlay");'>Settings</button>
+		</div>
+	</div>
+	<div id = 'settingsOverlay' class = 'hidden'>
+		<div class = 'buttonList'>
+			<h1>Settings</h1>
+			<div id = 'settingsContainer'></div>
+			<button onclick = 'javascript:showOverlay("menuOverlay");'>Back</button>
+		</div>
+	</div>
+	<div id = 'phrasesOverlay' class = 'hidden'>
+		<div class = 'buttonList'>
+			<h1>Set Up Phrases</h1>
+			<textarea id='phraseInput' cols="50" rows="10"></textarea>
+			<p>Enter one phrase per line.</p>
+			<button onclick = 'javascript:updatePhrases(); showOverlay("menuOverlay");'>Back</button>
+		</div>
+	</div>
+	<div id = 'winnerOverlay' class = 'hidden'>
+		<div class = 'buttonList'>
+			<p id = 'finalPhrase'></p>
+			<button id = 'nextPhraseButton' onclick = 'javascript:showNextPhrase();closeOverlay("winnerOverlay");'>Next</button>
+		</div>
+	</div>
+	<div id = 'phraseContainer'></div>
+	<div class = 'extraStuff'>
+		<button onclick = 'javascript:showOverlay("menuOverlay"); teardownPhrase();'>Menu</button>
+		<button onclick = 'javascript:revealPhrase();'>Reveal</button>
+		<div>Guesses: <span id = 'guessCount'>0</span></div>
+		<div>Remaining letters: <span id = 'remainingLetterCount'>0</span></div>
+	</div>
+</body>
+</html>
